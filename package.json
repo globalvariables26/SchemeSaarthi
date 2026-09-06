@@ -1,0 +1,26 @@
+{
+  "name": "schemesaarthi-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "next": "14.2.5",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "@supabase/supabase-js": "^2.45.4",
+    "framer-motion": "^11.5.4"
+  },
+  "devDependencies": {
+    "tailwindcss": "^3.4.10",
+    "postcss": "^8.4.45",
+    "autoprefixer": "^10.4.20",
+    "typescript": "^5.5.4",
+    "@types/react": "^18.3.5",
+    "@types/node": "^22.5.4"
+  }
+}
