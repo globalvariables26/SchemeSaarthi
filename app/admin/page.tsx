@@ -12,7 +12,7 @@ import { useEffect, useState } from "react";
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
 
 // TODO(Sher/Jaya): replace with the real seeded citizen_id, or load it from a config endpoint.
-const DEMO_CITIZEN_ID = "REPLACE_WITH_SEEDED_CITIZEN_ID";
+const DEMO_CITIZEN_ID = "76f2232e-9707-4a2a-8298-1f8facbb6200";
 
 type GraphEvent = {
   type: string;
