@@ -1,11 +1,5 @@
-"""
-Matching Agent — Owner: Ishaan.
-
-Responsibility (fixed): compares a citizen's CLEARED attributes (via ConsentGateway only,
-already populated in state.cleared_attributes by the Consent Agent node) against each scheme's
-criteria. Decides whether a scheme applies and at what confidence. On ambiguous/partial data,
-must express uncertainty — never force a true/false.
-"""
+"""Matching Agent — Owner: Ishaan. Fixed: clears old match_records for this citizen before
+inserting fresh results each run, so repeated runs update in place instead of piling up."""
 from __future__ import annotations
 
 import json
@@ -38,6 +32,9 @@ def run(state: GraphState, ctx: AgentContext) -> GraphState:
         cleared = {k: v.attribute_value for k, v in state.cleared_attributes.items()}
         justifying_ids = [v.citizen_attribute_id for v in state.cleared_attributes.values()]
 
+        # Clear this citizen's old match records BEFORE inserting fresh ones — this is the fix.
+        ctx.db.table("match_records").delete().eq("citizen_id", state.citizen_id).execute()
+
         results: list[MatchWorkingRecord] = []
         for scheme in schemes:
             user_prompt = json.dumps({
@@ -46,7 +43,7 @@ def run(state: GraphState, ctx: AgentContext) -> GraphState:
             })
             try:
                 llm_out = call_json(SYSTEM_PROMPT, user_prompt, model=REASONING_MODEL)
-            except Exception as llm_exc:  # noqa: BLE001 — per-scheme failure shouldn't kill the whole node
+            except Exception as llm_exc:
                 results.append(MatchWorkingRecord(
                     scheme_id=scheme["id"], scheme_name=scheme["name"],
                     applies=None, confidence=0.0, missing_data=["<llm_error>"],
@@ -79,8 +76,6 @@ def run(state: GraphState, ctx: AgentContext) -> GraphState:
             )
             results.append(record)
 
-            # persist to match_records (upsert-by-citizen+scheme kept simple: always insert;
-            # a fuller build would upsert on (citizen_id, scheme_id))
             ctx.db.table("match_records").insert({
                 "citizen_id": state.citizen_id,
                 "scheme_id": scheme["id"],
@@ -88,6 +83,7 @@ def run(state: GraphState, ctx: AgentContext) -> GraphState:
                 "justifying_attributes": justifying_ids,
                 "status": status,
                 "rejection_reason": record.rejection_reason,
+                "reasoning": reasoning,
             }).execute()
 
         state.current_matches = results
@@ -102,7 +98,7 @@ def run(state: GraphState, ctx: AgentContext) -> GraphState:
             status=overall_status, reason=reason,
             output={"matched": sum(1 for r in results if r.status == "matched")},
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         state.node_results["MatchingAgent"] = NodeResult(status="failed", reason=str(exc))
         write_audit(
             ctx.db, citizen_id=state.citizen_id, agent_name="MatchingAgent",

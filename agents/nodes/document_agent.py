@@ -1,13 +1,9 @@
 """
 Document Agent — Owner: Ishaan.
 
-Responsibility (fixed): compares scheme.required_documents against citizen_documents_held
-(deterministic — no LLM for the comparison itself). Decides which documents are missing or
-newly required. LLM (8B) only turns the missing-doc list into a plain-language checklist.
-
-Failure mode to implement: a document_rule change (surfaced by Discovery Agent as
-state.new_rule_payload) can make an existing profile incomplete — re-run the comparison for
-documents touched by that rule.
+Compares scheme.required_documents against citizen_documents_held, AND separately checks a
+fixed baseline of ID documents (Aadhaar, PAN) that every adult citizen needs regardless of
+which scheme they matched.
 """
 from __future__ import annotations
 
@@ -17,6 +13,11 @@ from agents.audit import write_audit
 from agents.context import AgentContext
 from agents.llm_client import FAST_MODEL, call_text
 from agents.state import GraphState, NodeResult, PendingDocument
+
+BASELINE_KYC_DOCS = {
+    "pan_card": 18,
+    "aadhaar_card": 0,
+}
 
 
 def _held_documents(ctx: AgentContext, citizen_id: str) -> dict[str, dict]:
@@ -37,9 +38,8 @@ def run(state: GraphState, ctx: AgentContext) -> GraphState:
     try:
         held = _held_documents(ctx, state.citizen_id)
         pending: list[PendingDocument] = []
+        missing_doc_types: set[str] = set()
 
-        # Only look at documents relevant to schemes the citizen matched or is uncertain on —
-        # avoids nagging about documents for schemes they're flatly ineligible for.
         relevant_scheme_ids = [
             m.scheme_id for m in state.current_matches if m.status in ("matched", "needs_document", "uncertain")
         ]
@@ -48,19 +48,24 @@ def run(state: GraphState, ctx: AgentContext) -> GraphState:
             .in_("id", relevant_scheme_ids).execute().data
             if relevant_scheme_ids else []
         )
-
-        missing_doc_types: set[str] = set()
         for scheme in schemes:
             for doc_type in scheme["required_documents"]:
                 doc_row = held.get(doc_type)
-                if doc_row is None:
-                    missing_doc_types.add(doc_type)
-                elif _is_expired(doc_row):
+                if doc_row is None or _is_expired(doc_row):
                     missing_doc_types.add(doc_type)
 
-        # If a new document rule just came in (from Discovery Agent), re-check anyone whose
-        # profile touches that document type — for the demo, "anyone" = this citizen, since only
-        # the demo citizen is shown live, but a fuller build would loop over all citizens here.
+        age_attr = state.cleared_attributes.get("age")
+        age_val = None
+        if age_attr:
+            try:
+                age_val = int(age_attr.attribute_value)
+            except ValueError:
+                age_val = None
+
+        for doc_type, min_age in BASELINE_KYC_DOCS.items():
+            if age_val is not None and age_val >= min_age and doc_type not in held:
+                missing_doc_types.add(doc_type)
+
         if state.new_rule_payload:
             rule_doc_type = state.new_rule_payload.get("document_type")
             if rule_doc_type and rule_doc_type not in held:
@@ -68,20 +73,20 @@ def run(state: GraphState, ctx: AgentContext) -> GraphState:
 
         for doc_type in missing_doc_types:
             checklist_text = call_text(
-                system_prompt="Write a short, numbered, plain-language checklist (2-4 steps) "
+                system_prompt="Write a numbered plain-language checklist of exactly 4 short steps "
                               "for an Indian citizen to obtain a specific government document. "
-                              "Name a plausible local office (e.g. Tehsildar, Gram Panchayat, "
-                              "municipal office) where relevant.",
+                              "Plain text only - no markdown, no asterisks, no bold. Name a plausible "
+                              "local office (e.g. Tehsildar, Gram Panchayat, UIDAI center, "
+                              "NSDL/UTIITSL center) where relevant. Keep each step under 15 words.",
                 user_prompt=f"Document needed: {doc_type}",
                 model=FAST_MODEL,
-                max_tokens=150,
+                max_tokens=250,
             )
             pending.append(PendingDocument(
                 document_type=doc_type,
-                reason="Missing or expired, required by a matched/uncertain scheme.",
+                reason="Missing or expired.",
                 checklist=[line.strip() for line in checklist_text.split("\n") if line.strip()],
             ))
-            # reflect in match status: any match needing this doc moves to needs_document
             for m in state.current_matches:
                 if m.status == "matched":
                     m.status = "needs_document"
@@ -96,7 +101,7 @@ def run(state: GraphState, ctx: AgentContext) -> GraphState:
         state.node_results["DocumentAgent"] = NodeResult(
             status=status, reason=reason, output={"missing_count": len(pending)},
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         state.node_results["DocumentAgent"] = NodeResult(status="failed", reason=str(exc))
         write_audit(
             ctx.db, citizen_id=state.citizen_id, agent_name="DocumentAgent",
