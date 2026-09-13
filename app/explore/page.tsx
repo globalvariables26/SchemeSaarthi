@@ -1,31 +1,35 @@
 "use client";
 import { useState } from "react";
+import { useCitizen } from "@/lib/useCitizen";
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
-const DEMO_CITIZEN_ID = "76f2232e-9707-4a2a-8298-1f8facbb6200";
 
 export default function ExplorePage() {
+  const { citizenId, loading: authLoading } = useCitizen();
   const [query, setQuery] = useState("");
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function search() {
+    if (!citizenId) return;
     setLoading(true);
     setError(null);
     setResult(null);
     try {
       const res = await fetch(
-        `${BACKEND_URL}/api/citizen/${DEMO_CITIZEN_ID}/explore?scheme_name_query=${encodeURIComponent(query)}`
+        `${BACKEND_URL}/api/citizen/${citizenId}/explore?scheme_name_query=${encodeURIComponent(query)}`
       );
-      if (!res.ok) throw new Error("Not found");
+      if (!res.ok) throw new Error("Request failed");
       setResult(await res.json());
     } catch {
-      setError("No matching scheme found, or the backend isn't reachable.");
+      setError("The backend isn't reachable right now.");
     } finally {
       setLoading(false);
     }
   }
+
+  if (authLoading || !citizenId) return <main className="p-8">Loading…</main>;
 
   return (
     <main className="p-8 max-w-xl">
@@ -33,7 +37,7 @@ export default function ExplorePage() {
       <div className="flex gap-2">
         <input
           className="border rounded px-3 py-2 flex-1"
-          placeholder="Search a scheme name…"
+          placeholder="Search a scheme, e.g. 'farmer scheme' or 'pension'…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && search()}
@@ -42,9 +46,17 @@ export default function ExplorePage() {
           Search
         </button>
       </div>
+
       {loading && <p className="mt-4">Searching…</p>}
       {error && <p className="mt-4 text-rose-600">{error}</p>}
-      {result && (
+
+      {result && !result.scheme && (
+        <div className="mt-6 border rounded-lg p-4 bg-amber-50 border-amber-200">
+          <p className="text-sm">{result.no_match_message}</p>
+        </div>
+      )}
+
+      {result && result.scheme && (
         <div className="mt-6 border rounded-lg p-4">
           <h2 className="font-semibold">{result.scheme}</h2>
           {result.matched ? (
